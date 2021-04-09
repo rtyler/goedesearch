@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 fn main() -> Result<(), std::io::Error>{
     println!("Loading data file..");
-    let entries = Abstract::load_from_file(&PathBuf::from("data/enwiki-latest-abstract.xml.gz"))?;
+    let entries = Article::load_from_file(&PathBuf::from("data/enwiki-latest-abstract.xml.gz"))?;
     println!("Parsed {} entries", entries.len());
     Ok(())
 }
@@ -21,9 +21,7 @@ fn main() -> Result<(), std::io::Error>{
  * A wikipedia abstract data structure
  */
 #[derive(Clone, Debug, Deserialize)]
-#[serde(rename = "doc")]
-struct Abstract {
-    id: Option<u64>,
+struct Article {
     title: String,
     r#abstract: String,
     url: url::Url,
@@ -36,11 +34,20 @@ struct Abstract {
  */
 #[derive(Clone, Debug, Deserialize)]
 struct Feed {
-    doc: Vec<Abstract>,
+    doc: Vec<Article>,
 }
 
+impl Article {
+    /**
+     * Return the unique integer ID for the Article computed from the url
+     */
+    fn id(&self) -> u64 {
+        use crc::{crc64, Hasher64};
+        let mut digest = crc64::Digest::new(crc64::ECMA);
+        digest.write(self.url.as_str().as_bytes());
+        digest.sum64()
+    }
 
-impl Abstract {
     /**
      * Return the full text for the abstract which is basically just the
      * title and the brief description
@@ -55,8 +62,6 @@ impl Abstract {
     fn load_from_file(gzip_xml: &PathBuf) -> Result<Vec<Self>, std::io::Error> {
         use std::io::BufReader;
         use quick_xml::de::from_reader;
-        use quick_xml::Reader;
-        use quick_xml::events::Event;
 
         let file = File::open(gzip_xml)?;
         let gz = GzDecoder::new(BufReader::new(file));
@@ -71,7 +76,7 @@ mod tests {
 
     #[test]
     fn test_simple_data() -> Result<(), std::io::Error> {
-        let entries = Abstract::load_from_file(&PathBuf::from("data/simple.xml.gz"))?;
+        let entries = Article::load_from_file(&PathBuf::from("data/simple.xml.gz"))?;
         assert!(entries.len() > 0);
         Ok(())
     }

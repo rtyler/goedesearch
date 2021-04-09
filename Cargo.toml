@@ -5,11 +5,10 @@ authors = ["R. Tyler Croy <rtyler@brokenco.de>"]
 edition = "2018"
 
 [dependencies]
+crc = "1"
 flate2 = { version = "1", features = ["zlib-ng-compat"], default-features = false }
-#flate2 = { version = "1", features = ["zlib"], default-features = false }
-#flate2 = "1"
 quick-xml = { version = "0.22", features = ["serialize", "encoding"] }
-serde = { version = "1", features = ["derive", "rc"] }
+serde = { version = "1", features = ["derive"] }
 url = { version = "2", features = ["serde"] }
 
 [profile.release]
