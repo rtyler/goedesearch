@@ -9,8 +9,11 @@ use serde::Deserialize;
 use std::fs::File;
 use std::path::PathBuf;
 
-fn main() {
-    println!("Hello, world!");
+fn main() -> Result<(), std::io::Error>{
+    println!("Loading data file..");
+    let entries = Abstract::load_from_file(&PathBuf::from("data/enwiki-latest-abstract.xml.gz"))?;
+    println!("Parsed {} entries", entries.len());
+    Ok(())
 }
 
 
@@ -57,58 +60,8 @@ impl Abstract {
 
         let file = File::open(gzip_xml)?;
         let gz = GzDecoder::new(BufReader::new(file));
-        println!("header: {:?}", gz.header());
-        let mut reader = BufReader::new(gz);
-        let mut line = String::new();
-
-        use std::io::BufRead;
-        let mut count = 0;
-        loop {
-            if count > 10 {
-                break;
-            }
-            count += 1;
-            let mut line = String::new();
-            let len = reader.read_line(&mut line)?;
-            println!("{} - {}", len, line);
-        }
-        return Ok(vec![]);
-
-        let mut reader = Reader::from_reader(BufReader::new(gz));
-        let mut buf = vec![];
-        //let mut tags = std::collections::HashSet::new();
-
-        loop {
-            if count > 10 {
-                break;
-            }
-
-            match reader.read_event(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let tag = e.name();
-                    println!("tag: {}", String::from_utf8_lossy(tag));
-                // for namespaced:
-                // Ok((ref namespace_value, Event::Start(ref e)))
-                    match tag {
-                        b"doc" => count += 1,
-                        _ => {
-                           //tags.insert(String::from_utf8_lossy(&tag));
-                        },
-                    }
-                },
-                // unescape and decode the text event using the reader encoding
-                //Ok(Event::Text(e)) => txt.push(e.unescape_and_decode(&reader).unwrap()),
-                Ok(Event::Eof) => break, // exits the loop when reaching end of file
-                Err(e) => panic!("Error at position {}: {:?}", reader.buffer_position(), e),
-                other => {
-                    println!("wtf: {:?}", other);
-                }, // There are several other `Event`s we do not consider here
-            }
-        }
-        println!("docs: {}", count);
-        //let wikipedia: Feed = from_reader(BufReader::new(gz)).expect("Failed to read dump");
-
-        Ok(vec![])
+        let wikipedia: Feed = from_reader(BufReader::new(gz)).expect("Failed to read dump");
+        Ok(wikipedia.doc)
     }
 }
 
@@ -116,17 +69,9 @@ impl Abstract {
 mod tests {
     use super::*;
 
-    #[ignore]
     #[test]
     fn test_simple_data() -> Result<(), std::io::Error> {
-        let entries = Abstract::load_from_file(&PathBuf::from("simple.xml.gz"))?;
-        assert!(entries.len() > 0);
-        Ok(())
-    }
-
-    #[test]
-    fn test_wikipedia_data() -> Result<(), std::io::Error> {
-        let entries = Abstract::load_from_file(&PathBuf::from("enwiki-latest-abstract.xml.gz"))?;
+        let entries = Abstract::load_from_file(&PathBuf::from("data/simple.xml.gz"))?;
         assert!(entries.len() > 0);
         Ok(())
     }
