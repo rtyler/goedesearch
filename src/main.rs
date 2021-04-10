@@ -20,12 +20,28 @@ struct CLI {
     help: bool,
     #[options(required, help="Specify the data file")]
     datafile: PathBuf,
+    #[options(help="A string to query for")]
+    query: Option<String>,
+}
 
-    #[options(free, help="A string to query for")]
-    query: String,
+impl CLI {
+    fn query(index: &Index, query: &str) {
+        println!("Querying for: `{}`", query);
+        let documents = index.query_index(query);
+        println!("Found {} documents", documents.len());
+        for id in documents {
+            if let Some(document) = index.document(&id) {
+                println!("{}\n-------------------", document);
+            }
+        }
+    }
 }
 
 fn main() -> Result<(), std::io::Error>{
+    use rustyline::Editor;
+    use rustyline::error::ReadlineError;
+
+    pretty_env_logger::init();
     let opts = CLI::parse_args_or_exit(gumdrop::ParsingStyle::AllOptions);
     println!("Loading data file: {:?}", opts.datafile);
 
@@ -36,12 +52,34 @@ fn main() -> Result<(), std::io::Error>{
     for entry in entries {
         index.index_document(entry)?;
     }
-    println!("Querying for: `{}`", opts.query);
-    let documents = index.query_index(&opts.query);
-    println!("Found {} documents", documents.len());
-    for id in documents {
-        println!("{:?}", index.document(&id));
+
+    if let Some(query) = &opts.query {
+        CLI::query(&index, query);
     }
+    else {
+        let history = ".geodesearch-history.txt";
+        let mut rl = Editor::<()>::new();
+
+        if rl.load_history(history).is_err() {
+            info!("No previous history.");
+        }
+        loop {
+            match rl.readline("query> ") {
+                Ok(line) => {
+                    CLI::query(&index, &line);
+                },
+                Err(ReadlineError::Eof) => { break },
+                Err(ReadlineError::Interrupted) => { break },
+                Err(err) => {
+                    error!("Failed while reading line: {:?}", err);
+                    break
+                },
+            }
+        }
+
+        rl.save_history(history).expect("Failed to save history");
+    }
+
     Ok(())
 }
 
@@ -51,7 +89,18 @@ type DocumentId = u64;
  */
 #[derive(Clone, Debug)]
 struct Index {
+    /**
+     * Global mapping of each document and its id
+     */
     documents: HashMap<DocumentId, Article>,
+    /**
+     * The frequencies of a term in the given document, keyed by the DocumentId
+     * and the term within the document.
+     */
+    freq: HashMap<(DocumentId, String), u64>,
+    /**
+     * Index containing a mapping of terms to the documents which refer to them
+     */
     index: HashMap<String, HashSet<DocumentId>>,
 }
 
@@ -60,28 +109,36 @@ impl Index {
         Self {
             documents: HashMap::default(),
             index: HashMap::default(),
+            freq: HashMap::default(),
         }
     }
 
+    /**
+     * Attempt to retrieve the given document from the index
+     */
     fn document(&self, id: &DocumentId) -> Option<&Article> {
         self.documents.get(id)
     }
 
-    fn query_index(&self, query: &str) -> HashSet<DocumentId> {
+    /**
+     * Query the index for the given query string
+     *
+     * The query will be normalized and an ordering of document IDs will be returned
+     */
+    fn query_index(&self, query: &str) -> Vec<DocumentId> {
         let normalized = filters::filter(query);
         let mut sets = vec![];
 
-        for token in normalized {
-            if let Some(doc_ids) = self.index.get(&token) {
+        for token in normalized.iter() {
+            if let Some(doc_ids) = self.index.get(token) {
                 debug!("Docs found for token `{}`: {:?}", token, doc_ids);
                 sets.push(doc_ids);
             }
         }
 
         // Depending on how mnay sets were collected, return the intersection
-        match sets.len() {
+        let documents = match sets.len() {
             0 => HashSet::new(),
-            //1 => sets.pop().unwrap(),
             _ => {
                 sets[0]
                     .iter()
@@ -89,7 +146,29 @@ impl Index {
                     .map(|b| *b)
                     .collect()
             }
+        };
+
+        /*
+         * Time to rank these documents based on query
+         */
+        let mut results = vec![];
+        for id in documents.iter() {
+            let mut score = 0;
+            for token in normalized.iter() {
+                if let Some(frequency) = self.freq.get(&(*id, token.to_string())) {
+                    score += frequency;
+                }
+            }
+
+            debug!("Doc: {} has score: {}", id, score);
+            results.push((id, score));
         }
+
+        /*
+         * Sort the results by whoever has the highest score and return
+         */
+        results.sort_by(|a,b| b.1.cmp(&a.1));
+        results.iter().map(|r| *r.0).collect()
     }
 
     fn index_document(&mut self, article: Article) -> Result<(), std::io::Error> {
@@ -99,6 +178,17 @@ impl Index {
 
             // Make sure we have each token from the document in the index
             for token in tokens.iter() {
+                // TODO: Find a way around this clone
+                let freq_tuple = (id, token.clone());
+                if ! self.freq.contains_key(&freq_tuple) {
+                    self.freq.insert(freq_tuple, 1);
+                }
+                else {
+                    if let Some(freq) = self.freq.get_mut(&freq_tuple) {
+                        *freq += 1;
+                    }
+                }
+
                 if ! self.index.contains_key(token) {
                     self.index.insert(token.to_string(), HashSet::new());
                 }
@@ -127,6 +217,12 @@ struct Article {
     url: url::Url,
     #[serde(skip_deserializing)]
     links: Vec<String>,
+}
+
+impl std::fmt::Display for Article {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{}\n    {}\n<{}>", self.title, self.r#abstract, self.url)
+    }
 }
 
 /**
