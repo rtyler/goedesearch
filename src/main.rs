@@ -5,123 +5,114 @@
  */
 
 use flate2::read::GzDecoder;
+use gumdrop::Options;
+use log::*;
 use serde::Deserialize;
 use std::fs::File;
 use std::path::PathBuf;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+mod filters;
+
+#[derive(Debug, Options)]
+struct CLI {
+    #[options(help = "print help message")]
+    help: bool,
+    #[options(required, help="Specify the data file")]
+    datafile: PathBuf,
+
+    #[options(free, help="A string to query for")]
+    query: String,
+}
 
 fn main() -> Result<(), std::io::Error>{
-    println!("Loading data file..");
-    let entries = Article::load_from_file(&PathBuf::from("data/enwiki-latest-abstract.xml.gz"))?;
+    let opts = CLI::parse_args_or_exit(gumdrop::ParsingStyle::AllOptions);
+    println!("Loading data file: {:?}", opts.datafile);
+
+    let entries = Article::load_from_file(&opts.datafile)?;
     println!("Parsed {} entries", entries.len());
+
+    let mut index = Index::new();
+    for entry in entries {
+        index.index_document(entry)?;
+    }
+    println!("Querying for: `{}`", opts.query);
+    let documents = index.query_index(&opts.query);
+    println!("Found {} documents", documents.len());
+    for id in documents {
+        println!("{:?}", index.document(&id));
+    }
     Ok(())
 }
 
+type DocumentId = u64;
 /**
  * A search index
  */
 #[derive(Clone, Debug)]
 struct Index {
-    items: HashMap<u64, Article>,
-}
-
-mod Filters {
-    const STOPWORDS: &'static [&'static str] = &["the", "be", "to", "of", "and",
-    "a", "in", "that", "have", "i", "it", "for", "not", "on", "with", "he", "as",
-    "you", "do", "at", "this", "but", "his", "by", "from", "wikipedia"];
-
-    fn stems(tokens: Vec<String>) -> Vec<String> {
-        use rust_stemmers::{Algorithm, Stemmer};
-        // Create a stemmer for the english language
-        let en_stemmer = Stemmer::create(Algorithm::English);
-        tokens.iter().map(|token| {
-            en_stemmer.stem(token).to_string()
-        }).collect()
-    }
-
-    fn tokenize(text: &str) -> Vec<&str> {
-        text.split(' ').collect()
-    }
-
-    fn lowercase(tokens: Vec<&str>) -> Vec<String> {
-        tokens.iter().map(|t| t.to_lowercase()).collect()
-    }
-
-    fn punctuation(tokens: Vec<String>) -> Vec<String> {
-        tokens.iter().map(|token| {
-            token.chars()
-                .filter(|c| !c.is_ascii_punctuation())
-                .collect()
-        }).collect()
-    }
-
-    fn stopwords(tokens: Vec<String>) -> Vec<String> {
-        tokens.into_iter().filter(|token| {
-            ! STOPWORDS.contains(&token.as_str())
-        }).collect()
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn test_tokenize() {
-            let buf = "yo hello world";
-            assert_eq!(
-                vec!["yo", "hello", "world"],
-                tokenize(buf));
-        }
-
-        #[test]
-        fn test_lowercase() {
-            let tokens = vec!["HellO", "WORLd"];
-            assert_eq!(
-                vec!["hello", "world"],
-                lowercase(tokens));
-        }
-
-        #[test]
-        fn test_punctuation() {
-            let tokens = vec!["This,".to_string(), "isn't".to_string(), "great?".to_string()];
-            assert_eq!(
-                vec!["This", "isnt", "great"],
-                punctuation(tokens));
-        }
-
-        #[test]
-        fn test_stopwords() {
-            let tokens = vec!["i".to_string(),
-                                "am".to_string(),
-                                "the".to_string(),
-                                "walrus".to_string()];
-            assert_eq!(vec!["am", "walrus"], stopwords(tokens));
-        }
-
-        #[test]
-        fn test_stems() {
-            let tokens = vec!["help".to_string(),
-                                "fruitlessly".to_string(),
-                                "fruitless".to_string()];
-            assert_eq!(vec!["help", "fruitless", "fruitless"], stems(tokens));
-        }
-    }
+    documents: HashMap<DocumentId, Article>,
+    index: HashMap<String, HashSet<DocumentId>>,
 }
 
 impl Index {
     fn new() -> Self {
         Self {
-            items: HashMap::default(),
+            documents: HashMap::default(),
+            index: HashMap::default(),
+        }
+    }
+
+    fn document(&self, id: &DocumentId) -> Option<&Article> {
+        self.documents.get(id)
+    }
+
+    fn query_index(&self, query: &str) -> HashSet<DocumentId> {
+        let normalized = filters::filter(query);
+        let mut sets = vec![];
+
+        for token in normalized {
+            if let Some(doc_ids) = self.index.get(&token) {
+                debug!("Docs found for token `{}`: {:?}", token, doc_ids);
+                sets.push(doc_ids);
+            }
+        }
+
+        // Depending on how mnay sets were collected, return the intersection
+        match sets.len() {
+            0 => HashSet::new(),
+            //1 => sets.pop().unwrap(),
+            _ => {
+                sets[0]
+                    .iter()
+                    .filter(|b| sets[1..].iter().all(|set| set.contains(*b)))
+                    .map(|b| *b)
+                    .collect()
+            }
         }
     }
 
     fn index_document(&mut self, article: Article) -> Result<(), std::io::Error> {
         let id = article.id();
-        if ! self.items.contains_key(&id) {
-            // Should index
-        }
+        if ! self.documents.contains_key(&id) {
+            let tokens = crate::filters::filter(&article.fulltext());
 
-        //  do something with tokens
+            // Make sure we have each token from the document in the index
+            for token in tokens.iter() {
+                if ! self.index.contains_key(token) {
+                    self.index.insert(token.to_string(), HashSet::new());
+                }
+                if let Some(set) = self.index.get_mut(token) {
+                    set.insert(id);
+                }
+                else {
+                    warn!("Tried to get a mutable version of the index for {} and failed", token);
+                }
+            }
+
+            self.documents.insert(id, article);
+            // TODO: Should analyze which means a term frequency count
+        }
         Ok(())
     }
 }
@@ -150,7 +141,7 @@ impl Article {
     /**
      * Return the unique integer ID for the Article computed from the url
      */
-    fn id(&self) -> u64 {
+    fn id(&self) -> DocumentId {
         use crc::{crc64, Hasher64};
         let mut digest = crc64::Digest::new(crc64::ECMA);
         digest.write(self.url.as_str().as_bytes());
@@ -182,6 +173,11 @@ impl Article {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_index_new() {
+        let _index = Index::new();
+    }
 
     #[test]
     fn test_simple_data() -> Result<(), std::io::Error> {
