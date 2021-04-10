@@ -97,7 +97,7 @@ struct Index {
      * The frequencies of a term in the given document, keyed by the DocumentId
      * and the term within the document.
      */
-    freq: HashMap<(DocumentId, String), u64>,
+    freq: HashMap<(DocumentId, String), f64>,
     /**
      * Index containing a mapping of terms to the documents which refer to them
      */
@@ -152,11 +152,16 @@ impl Index {
          * Time to rank these documents based on query
          */
         let mut results = vec![];
+        let total_docs = self.documents.len() as f64;
+
         for id in documents.iter() {
-            let mut score = 0;
+            let mut score = 0.0;
+
             for token in normalized.iter() {
-                if let Some(frequency) = self.freq.get(&(*id, token.to_string())) {
-                    score += frequency;
+                if let Some(term_frequency) = self.freq.get(&(*id, token.to_string())) {
+                    // inverse document frequency
+                    let idf = ((total_docs / term_frequency) as f64).log10();
+                    score += idf * term_frequency;
                 }
             }
 
@@ -167,7 +172,8 @@ impl Index {
         /*
          * Sort the results by whoever has the highest score and return
          */
-        results.sort_by(|a,b| b.1.cmp(&a.1));
+        results.sort_by(|a,b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Less));
+        debug!("Document scores: {:?}", results);
         results.iter().map(|r| *r.0).collect()
     }
 
@@ -181,11 +187,11 @@ impl Index {
                 // TODO: Find a way around this clone
                 let freq_tuple = (id, token.clone());
                 if ! self.freq.contains_key(&freq_tuple) {
-                    self.freq.insert(freq_tuple, 1);
+                    self.freq.insert(freq_tuple, 1.0);
                 }
                 else {
                     if let Some(freq) = self.freq.get_mut(&freq_tuple) {
-                        *freq += 1;
+                        *freq += 1.0;
                     }
                 }
 
@@ -201,10 +207,17 @@ impl Index {
             }
 
             self.documents.insert(id, article);
-            // TODO: Should analyze which means a term frequency count
         }
         Ok(())
     }
+}
+
+/**
+ * A simple container struct to read the wikipedia dump
+ */
+#[derive(Clone, Debug, Deserialize)]
+struct Feed {
+    doc: Vec<Article>,
 }
 
 /**
@@ -221,17 +234,10 @@ struct Article {
 
 impl std::fmt::Display for Article {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "{}\n    {}\n<{}>", self.title, self.r#abstract, self.url)
+        write!(f, "{}\t({})\n    {}\n<{}>", self.title, self.id(), self.r#abstract, self.url)
     }
 }
 
-/**
- * A simple container struct to read the wikipedia dump
- */
-#[derive(Clone, Debug, Deserialize)]
-struct Feed {
-    doc: Vec<Article>,
-}
 
 impl Article {
     /**
