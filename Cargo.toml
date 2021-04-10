@@ -7,7 +7,9 @@ edition = "2018"
 [dependencies]
 crc = "1"
 flate2 = { version = "1", features = ["zlib-ng-compat"], default-features = false }
+log = "*"
 quick-xml = { version = "0.22", features = ["serialize", "encoding"] }
+rust-stemmers = "1"
 serde = { version = "1", features = ["derive"] }
 url = { version = "2", features = ["serde"] }
 
