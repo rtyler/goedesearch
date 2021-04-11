@@ -7,9 +7,9 @@
 use flate2::read::GzDecoder;
 use gumdrop::Options;
 use log::*;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::PathBuf;
-use std::collections::{HashMap, HashSet};
 use url::Url;
 
 mod filters;
@@ -18,9 +18,9 @@ mod filters;
 struct CLI {
     #[options(help = "print help message")]
     help: bool,
-    #[options(required, help="Specify the data file")]
+    #[options(required, help = "Specify the data file")]
     datafile: PathBuf,
-    #[options(help="A string to query for")]
+    #[options(help = "A string to query for")]
     query: Option<String>,
 }
 
@@ -37,9 +37,9 @@ impl CLI {
     }
 }
 
-fn main() -> Result<(), std::io::Error>{
-    use rustyline::Editor;
+fn main() -> Result<(), std::io::Error> {
     use rustyline::error::ReadlineError;
+    use rustyline::Editor;
 
     pretty_env_logger::init();
     let opts = CLI::parse_args_or_exit(gumdrop::ParsingStyle::AllOptions);
@@ -50,8 +50,7 @@ fn main() -> Result<(), std::io::Error>{
 
     if let Some(query) = &opts.query {
         CLI::query(&index, query);
-    }
-    else {
+    } else {
         let history = ".geodesearch-history.txt";
         let mut rl = Editor::<()>::new();
 
@@ -62,13 +61,13 @@ fn main() -> Result<(), std::io::Error>{
             match rl.readline("query> ") {
                 Ok(line) => {
                     CLI::query(&index, &line);
-                },
-                Err(ReadlineError::Eof) => { break },
-                Err(ReadlineError::Interrupted) => { break },
+                }
+                Err(ReadlineError::Eof) => break,
+                Err(ReadlineError::Interrupted) => break,
                 Err(err) => {
                     error!("Failed while reading line: {:?}", err);
-                    break
-                },
+                    break;
+                }
             }
         }
 
@@ -112,9 +111,9 @@ impl Index {
      * Load a Wikipedia XML dump from a gzip file
      */
     fn from_file(path: &PathBuf) -> Result<Self, std::io::Error> {
-        use std::io::BufReader;
-        use quick_xml::Reader;
         use quick_xml::events::Event;
+        use quick_xml::Reader;
+        use std::io::BufReader;
 
         let mut index = Self::new();
         let file = File::open(path)?;
@@ -126,25 +125,27 @@ impl Index {
 
         loop {
             match reader.read_event(&mut buf) {
-            // for triggering namespaced events, use this instead:
-            // match reader.read_namespaced_event(&mut buf) {
+                // for triggering namespaced events, use this instead:
+                // match reader.read_namespaced_event(&mut buf) {
                 Ok(Event::Start(ref e)) => {
-                // for namespaced:
-                // Ok((ref namespace_value, Event::Start(ref e)))
+                    // for namespaced:
+                    // Ok((ref namespace_value, Event::Start(ref e)))
                     match e.name() {
                         b"doc" => {
                             article = Some(Article::default());
-                        },
+                        }
                         b"title" => {
                             if let Some(ref mut article) = article {
-                                article.title = reader.read_text(e.name(), &mut Vec::new()).unwrap();
+                                article.title =
+                                    reader.read_text(e.name(), &mut Vec::new()).unwrap();
                             }
-                        },
+                        }
                         b"abstract" => {
                             if let Some(ref mut article) = article {
-                                article.r#abstract = reader.read_text(e.name(), &mut Vec::new()).unwrap();
+                                article.r#abstract =
+                                    reader.read_text(e.name(), &mut Vec::new()).unwrap();
                             }
-                        },
+                        }
                         b"url" => {
                             if let Some(ref mut article) = article {
                                 let u = reader.read_text(e.name(), &mut Vec::new()).unwrap();
@@ -153,15 +154,13 @@ impl Index {
                         }
                         _ => (),
                     }
-                },
-                Ok(Event::End(ref e)) => {
-                    match e.name() {
-                        b"doc" => {
-                            index.index_document(article.unwrap()).unwrap();
-                            article = None
-                        },
-                        _ => (),
+                }
+                Ok(Event::End(ref e)) => match e.name() {
+                    b"doc" => {
+                        index.index_document(article.unwrap()).unwrap();
+                        article = None
                     }
+                    _ => (),
                 },
                 // unescape and decode the text event using the reader encoding
                 //Ok(Event::Text(e)) => txt.push(e.unescape_and_decode(&reader).unwrap()),
@@ -211,13 +210,11 @@ impl Index {
         // Depending on how mnay sets were collected, return the intersection
         let documents = match sets.len() {
             0 => HashSet::new(),
-            _ => {
-                sets[0]
-                    .iter()
-                    .filter(|b| sets[1..].iter().all(|set| set.contains(*b)))
-                    .map(|b| *b)
-                    .collect()
-            }
+            _ => sets[0]
+                .iter()
+                .filter(|b| sets[1..].iter().all(|set| set.contains(*b)))
+                .map(|b| *b)
+                .collect(),
         };
 
         /*
@@ -244,37 +241,38 @@ impl Index {
         /*
          * Sort the results by whoever has the highest score and return
          */
-        results.sort_by(|a,b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Less));
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Less));
         debug!("Document scores: {:?}", results);
         results.iter().map(|r| *r.0).collect()
     }
 
     fn index_document(&mut self, article: Article) -> Result<(), std::io::Error> {
         let id = article.id();
-        if ! self.documents.contains_key(&id) {
+        if !self.documents.contains_key(&id) {
             let tokens = crate::filters::filter(&article.fulltext());
 
             // Make sure we have each token from the document in the index
             for token in tokens.iter() {
                 // TODO: Find a way around this clone
                 let freq_tuple = (id, token.clone());
-                if ! self.freq.contains_key(&freq_tuple) {
+                if !self.freq.contains_key(&freq_tuple) {
                     self.freq.insert(freq_tuple, 1.0);
-                }
-                else {
+                } else {
                     if let Some(freq) = self.freq.get_mut(&freq_tuple) {
                         *freq += 1.0;
                     }
                 }
 
-                if ! self.index.contains_key(token) {
+                if !self.index.contains_key(token) {
                     self.index.insert(token.to_string(), HashSet::new());
                 }
                 if let Some(set) = self.index.get_mut(token) {
                     set.insert(id);
-                }
-                else {
-                    warn!("Tried to get a mutable version of the index for {} and failed", token);
+                } else {
+                    warn!(
+                        "Tried to get a mutable version of the index for {} and failed",
+                        token
+                    );
                 }
             }
 
@@ -307,13 +305,15 @@ impl Default for Article {
 }
 impl std::fmt::Display for Article {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "{}\t({})\n    {}\n<>",
+        write!(
+            f,
+            "{}\t({})\n    {}\n<>",
             self.title,
             self.id(),
-            self.r#abstract)
+            self.r#abstract
+        )
     }
 }
-
 
 impl Article {
     /**
