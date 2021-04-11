@@ -5,7 +5,9 @@ authors = ["R. Tyler Croy <rtyler@brokenco.de>"]
 edition = "2018"
 
 [dependencies]
+chrono = "0.4"
 crc = "1"
+crossbeam = "0.8.0"
 flate2 = { version = "1", features = ["zlib-ng-compat"], default-features = false }
 gumdrop = "0.8"
 log = "*"
