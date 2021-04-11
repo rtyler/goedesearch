@@ -1,16 +1,16 @@
 /*
  * Goedesearch is an implementation of Bart's full text search engine as an exercise in Rust
- * 
+ *
  * To learn more about it in Python: https://bart.degoe.de/building-a-full-text-search-engine-150-lines-of-code/
  */
 
 use flate2::read::GzDecoder;
 use gumdrop::Options;
 use log::*;
-use serde::Deserialize;
 use std::fs::File;
 use std::path::PathBuf;
 use std::collections::{HashMap, HashSet};
+use url::Url;
 
 mod filters;
 
@@ -45,13 +45,8 @@ fn main() -> Result<(), std::io::Error>{
     let opts = CLI::parse_args_or_exit(gumdrop::ParsingStyle::AllOptions);
     println!("Loading data file: {:?}", opts.datafile);
 
-    let entries = Article::load_from_file(&opts.datafile)?;
-    println!("Parsed {} entries", entries.len());
-
-    let mut index = Index::new();
-    for entry in entries {
-        index.index_document(entry)?;
-    }
+    let index = Index::from_file(&opts.datafile)?;
+    println!("Parsed and indexed {} entries", index.size());
 
     if let Some(query) = &opts.query {
         CLI::query(&index, query);
@@ -111,6 +106,83 @@ impl Index {
             index: HashMap::default(),
             freq: HashMap::default(),
         }
+    }
+
+    /**
+     * Load a Wikipedia XML dump from a gzip file
+     */
+    fn from_file(path: &PathBuf) -> Result<Self, std::io::Error> {
+        use std::io::BufReader;
+        use quick_xml::Reader;
+        use quick_xml::events::Event;
+
+        let mut index = Self::new();
+        let file = File::open(path)?;
+        let gz = GzDecoder::new(BufReader::new(file));
+        let mut reader = Reader::from_reader(BufReader::new(gz));
+
+        let mut buf = vec![];
+        let mut article = None;
+
+        loop {
+            match reader.read_event(&mut buf) {
+            // for triggering namespaced events, use this instead:
+            // match reader.read_namespaced_event(&mut buf) {
+                Ok(Event::Start(ref e)) => {
+                // for namespaced:
+                // Ok((ref namespace_value, Event::Start(ref e)))
+                    match e.name() {
+                        b"doc" => {
+                            article = Some(Article::default());
+                        },
+                        b"title" => {
+                            if let Some(ref mut article) = article {
+                                article.title = reader.read_text(e.name(), &mut Vec::new()).unwrap();
+                            }
+                        },
+                        b"abstract" => {
+                            if let Some(ref mut article) = article {
+                                article.r#abstract = reader.read_text(e.name(), &mut Vec::new()).unwrap();
+                            }
+                        },
+                        b"url" => {
+                            if let Some(ref mut article) = article {
+                                let u = reader.read_text(e.name(), &mut Vec::new()).unwrap();
+                                article.set_url(&u).unwrap();
+                            }
+                        }
+                        _ => (),
+                    }
+                },
+                Ok(Event::End(ref e)) => {
+                    match e.name() {
+                        b"doc" => {
+                            index.index_document(article.unwrap()).unwrap();
+                            article = None
+                        },
+                        _ => (),
+                    }
+                },
+                // unescape and decode the text event using the reader encoding
+                //Ok(Event::Text(e)) => txt.push(e.unescape_and_decode(&reader).unwrap()),
+                Ok(Event::Eof) => break, // exits the loop when reaching end of file
+                Err(e) => panic!("Error at position {}: {:?}", reader.buffer_position(), e),
+                _ => (), // There are several other `Event`s we do not consider here
+            }
+
+            // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
+            buf.clear();
+        }
+
+        debug!("Found {} documents in the file", index.size());
+        Ok(index)
+    }
+
+    /**
+     * The number of documents in the index
+     */
+    fn size(&self) -> u64 {
+        self.documents.len() as u64
     }
 
     /**
@@ -213,28 +285,32 @@ impl Index {
 }
 
 /**
- * A simple container struct to read the wikipedia dump
- */
-#[derive(Clone, Debug, Deserialize)]
-struct Feed {
-    doc: Vec<Article>,
-}
-
-/**
  * A wikipedia abstract data structure
  */
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 struct Article {
+    id: Option<DocumentId>,
     title: String,
     r#abstract: String,
-    url: url::Url,
-    #[serde(skip_deserializing)]
-    links: Vec<String>,
+    url: Option<Url>,
 }
 
+impl Default for Article {
+    fn default() -> Self {
+        Self {
+            id: None,
+            title: String::new(),
+            r#abstract: String::new(),
+            url: None,
+        }
+    }
+}
 impl std::fmt::Display for Article {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "{}\t({})\n    {}\n<{}>", self.title, self.id(), self.r#abstract, self.url)
+        write!(f, "{}\t({})\n    {}\n<>",
+            self.title,
+            self.id(),
+            self.r#abstract)
     }
 }
 
@@ -244,10 +320,19 @@ impl Article {
      * Return the unique integer ID for the Article computed from the url
      */
     fn id(&self) -> DocumentId {
+        self.id.unwrap_or(0)
+    }
+
+    fn set_url(&mut self, url: &str) -> Result<(), url::ParseError> {
         use crc::{crc64, Hasher64};
+
+        let url = Url::parse(url).unwrap();
+
         let mut digest = crc64::Digest::new(crc64::ECMA);
-        digest.write(self.url.as_str().as_bytes());
-        digest.sum64()
+        digest.write(url.as_str().as_bytes());
+        self.url = Some(url);
+        self.id = Some(digest.sum64());
+        Ok(())
     }
 
     /**
@@ -256,19 +341,6 @@ impl Article {
      */
     fn fulltext(&self) -> String {
         format!("{} {}", self.title, self.r#abstract)
-    }
-
-    /**
-     * Load the abstract entries from the referenced file
-     */
-    fn load_from_file(gzip_xml: &PathBuf) -> Result<Vec<Self>, std::io::Error> {
-        use std::io::BufReader;
-        use quick_xml::de::from_reader;
-
-        let file = File::open(gzip_xml)?;
-        let gz = GzDecoder::new(BufReader::new(file));
-        let wikipedia: Feed = from_reader(BufReader::new(gz)).expect("Failed to read dump");
-        Ok(wikipedia.doc)
     }
 }
 
@@ -282,9 +354,15 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_data() -> Result<(), std::io::Error> {
-        let entries = Article::load_from_file(&PathBuf::from("data/simple.xml.gz"))?;
-        assert!(entries.len() > 0);
+    fn test_index_simple_data() -> Result<(), std::io::Error> {
+        let index = Index::from_file(&PathBuf::from("data/simple.xml.gz"))?;
+        assert_eq!(index.size(), 356);
         Ok(())
+    }
+
+    #[test]
+    fn test_index_size() {
+        let index = Index::new();
+        assert_eq!(index.size(), 0);
     }
 }
