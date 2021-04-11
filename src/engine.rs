@@ -196,6 +196,7 @@ impl Index {
      */
     pub fn query_index(&self, query: &str) -> Vec<DocumentId> {
         let normalized = crate::filters::filter(query);
+        debug!("Normalized query: {:?}", normalized);
         let mut sets = vec![];
 
         for token in normalized.iter() {

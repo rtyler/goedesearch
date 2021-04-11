@@ -33,90 +33,27 @@ const STOPWORDS: &'static [&'static str] = &[
 ];
 
 pub fn filter(text: &str) -> Vec<String> {
-    stems(stopwords(punctuation(lowercase(tokenize(text)))))
-}
-
-fn stems(tokens: Vec<String>) -> Vec<String> {
     use rust_stemmers::{Algorithm, Stemmer};
+
+    let mut stems = vec![];
     // Create a stemmer for the english language
     let en_stemmer = Stemmer::create(Algorithm::English);
-    tokens
-        .iter()
-        .map(|token| en_stemmer.stem(token).to_string())
-        .collect()
-}
 
-fn tokenize(text: &str) -> Vec<&str> {
-    text.split(' ').collect()
-}
+    for token in text.split(' ') {
+        let token: String = token.to_lowercase()
+            .chars()
+            .filter(|ch| ! ch.is_ascii_punctuation())
+            .collect();
 
-fn lowercase(tokens: Vec<&str>) -> Vec<String> {
-    tokens.iter().map(|t| t.to_lowercase()).collect()
-}
-
-fn punctuation(tokens: Vec<String>) -> Vec<String> {
-    tokens
-        .iter()
-        .map(|token| {
-            token
-                .chars()
-                .filter(|c| !c.is_ascii_punctuation())
-                .collect()
-        })
-        .collect()
-}
-
-fn stopwords(tokens: Vec<String>) -> Vec<String> {
-    tokens
-        .into_iter()
-        .filter(|token| !STOPWORDS.contains(&token.as_str()))
-        .collect()
+        // only stem the word if it doesn't match a stopword
+        if ! STOPWORDS.contains(&token.as_str()) {
+            stems.push(en_stemmer.stem(&token).to_string());
+        }
+    }
+    stems
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_tokenize() {
-        let buf = "yo hello world";
-        assert_eq!(vec!["yo", "hello", "world"], tokenize(buf));
-    }
-
-    #[test]
-    fn test_lowercase() {
-        let tokens = vec!["HellO", "WORLd"];
-        assert_eq!(vec!["hello", "world"], lowercase(tokens));
-    }
-
-    #[test]
-    fn test_punctuation() {
-        let tokens = vec![
-            "This,".to_string(),
-            "isn't".to_string(),
-            "great?".to_string(),
-        ];
-        assert_eq!(vec!["This", "isnt", "great"], punctuation(tokens));
-    }
-
-    #[test]
-    fn test_stopwords() {
-        let tokens = vec![
-            "i".to_string(),
-            "am".to_string(),
-            "the".to_string(),
-            "walrus".to_string(),
-        ];
-        assert_eq!(vec!["am", "walrus"], stopwords(tokens));
-    }
-
-    #[test]
-    fn test_stems() {
-        let tokens = vec![
-            "help".to_string(),
-            "fruitlessly".to_string(),
-            "fruitless".to_string(),
-        ];
-        assert_eq!(vec!["help", "fruitless", "fruitless"], stems(tokens));
-    }
 }
