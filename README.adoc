@@ -1,0 +1,13 @@
+= Goedesearch
+
+Goedesearch is goede enough for simple Wikipedia searching. It is a rough
+implementation of my colleague
+link:https://bart.degoe.de/building-a-full-text-search-engine-150-lines-of-code/[Bart
+de Goede's simple search engine in Python], except written in Rust.
+
+
+
+== To do
+
+. Convert the loading of the data file to do streaming parsing and indexing at the same time, and ideally in different threads.
+
